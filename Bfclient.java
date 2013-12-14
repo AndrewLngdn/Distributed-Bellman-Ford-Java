@@ -1,15 +1,20 @@
 import java.io.*;
 import java.net.*;
+import java.util.Hashtable;
+import java.util.ArrayList;
 class Bfclient {
 	static int localport;
 	static int timeout; // seconds
 	static boolean execute;
 	private BufferedReader input = null;
+	static ArrayList<Hashtable<String, String>> neighborsInfo 
+		= new ArrayList<Hashtable<String, String>>();
 
 	public static void main(String[] args){
 		execute = true;
-		
+
 		interpretArgs(args);
+		// setupSockets();
 		listenToSocket();
 		dealWithTimeouts();
 		listenForCommands();
@@ -53,6 +58,25 @@ class Bfclient {
 			System.out.println("localport: " + localport);
 			System.out.println("timeout: " + timeout);
 		}
+		
+		// fillout neighbor info
+		for (int i = 2; i < args.length; i += 3){
+			Hashtable<String, String> neighbor 
+				= new Hashtable<String, String>();
+
+			neighbor.put("ip", args[i]);
+			neighbor.put("port", args[i+1]);
+			neighbor.put("weight", args[i+2]);
+			neighborsInfo.add(neighbor);
+		}
+
+		System.out.println("first ip: " + neighborsInfo.get(0).get("ip"));
+		System.out.println("first port: " + neighborsInfo.get(0).get("port"));
+		System.out.println("first weight: " + neighborsInfo.get(0).get("weight"));
+		System.out.println("second ip: " + neighborsInfo.get(1).get("ip"));
+		System.out.println("second port: " + neighborsInfo.get(1).get("port"));
+		System.out.println("second weight: " + neighborsInfo.get(1).get("weight"));
+
 	}
 
 	public static void listenForCommands(){
