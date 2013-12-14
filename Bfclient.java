@@ -1,31 +1,61 @@
 import java.io.*;
 import java.net.*;
 class Bfclient {
-	int localport;
-	int timeout; // seconds
+	static int localport;
+	static int timeout; // seconds
+	static boolean execute;
 	private BufferedReader input = null;
-	boolean execute;
 
-	public Bfclient(String[] args){
+	public static void main(String[] args){
 		execute = true;
+		
+		interpretArgs(args);
+		listenToSocket();
+		dealWithTimeouts();
+		listenForCommands();
+	}
+
+	public static void listenToSocket(){
+		Thread t = new Thread(new Runnable(){
+			public void run(){
+				int count = 0;
+				while(execute){
+					//listen for updates from neighbor
+					// update RT
+					// update neighbors
+				}
+			}
+		});
+		t.start();
+	}
+
+	public static void dealWithTimeouts(){
+		Thread t = new Thread(new Runnable(){
+			public void run(){
+				int count = 0;
+				while(execute){
+					// if timeout,
+					// send copy of distance vector to neighbors
+				}
+			}
+		});
+		t.start();
+	}
+
+	public static void interpretArgs(String[] args){
 		if (args.length < 2 || (args.length-2)%3 != 0){
 			System.out.println("Incorrect arguments");
 			System.out.println("java Bfclient localport timeout [ipaddress1 port1 weight1 ...]");
 			System.exit(1);
 		} else { 
-			this.localport = Integer.parseInt(args[0]);
-			this.timeout = Integer.parseInt(args[1]);
+			localport = Integer.parseInt(args[0]);
+			timeout = Integer.parseInt(args[1]);
 			System.out.println("localport: " + localport);
 			System.out.println("timeout: " + timeout);
 		}
 	}
 
-	public static void main(String[] args){
-		Bfclient node = new Bfclient(args);
-		node.listenForCommands();
-	}
-
-	private void listenForCommands(){
+	public static void listenForCommands(){
 		BufferedReader stdIn = new BufferedReader(new InputStreamReader(System.in));
 		execute = true;
 		System.out.println(">----Commands----<");
@@ -35,10 +65,9 @@ class Bfclient {
 		System.out.println("CLOSE");
 		System.out.println(">-----------------<");
 
-
 		while(execute){
 			try {
-				this.interpretCommand(stdIn.readLine());
+				interpretCommand(stdIn.readLine());
 			} catch (IOException e){
 				System.err.println(e);
 			}
@@ -49,9 +78,10 @@ class Bfclient {
 		} catch (IOException e){
 			System.err.println(e);
 		}
+		System.exit(0);
 	}
 
-	private void interpretCommand(String command){
+	private static void interpretCommand(String command){
 		String[] tokens = command.split(" ");
 		if (tokens.length == 2 && tokens[0].equals("LINKDOWN")){
 			System.out.println("linkdown " + tokens[1]);
@@ -63,7 +93,8 @@ class Bfclient {
 			System.out.println("RouteTable");
 		} else 
 		if (tokens[0].equals("CLOSE")){
-			System.out.println("close it up!");
+			System.out.println("closing!");
+			execute = false;
 		} else {
 			System.out.println("Incorrect command, use one of the following:");
 			System.out.println("LINKDOWN [ip]");
