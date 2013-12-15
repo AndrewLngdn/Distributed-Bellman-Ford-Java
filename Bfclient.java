@@ -9,8 +9,10 @@ class Bfclient {
 	static boolean execute;
 	static DatagramSocket localSock;
 	private BufferedReader input = null;
-	static ArrayList<Hashtable<String, String>> neighborsInfo 
-		= new ArrayList<Hashtable<String, String>>();
+	static Hashtable<InetAddress, String> distanceVector = 
+		new Hashtable<InetAddress, String>();
+	static Hashtable<InetAddress, Hashtable<InetAddress, String>> neighborsDV =
+		new Hashtable<InetAddress, Hashtable<InetAddress, String>>();
 
 	public static void main(String[] args){
 		execute = true;
@@ -28,27 +30,46 @@ class Bfclient {
 			localSock = new DatagramSocket(localport);
 		} catch (SocketException e){
 			e.printStackTrace();
+			System.out.println("couldn't bind to port, choose again");
+			execute = false;
+			System.exit(1);
 		}
+	}
+
+	@SuppressWarnings("unchecked") // java doesn't trust me deserializing
+								   // distanceVectors from my other class
+	public static Hashtable<InetAddress, String> receiveUpdate() {
+		byte[] buffer = new byte[4096];
+		DatagramPacket rpack = new DatagramPacket(buffer, buffer.length);
+		
+		System.out.println("waiting to recieve");
+		try {
+			localSock.receive(rpack);
+			System.out.println("Received RT from ");
+		} catch (IOException e){
+			e.printStackTrace();
+		}
+
+		byte[] packet = new byte[rpack.getLength()];
+		System.arraycopy(rpack.getData(), 0, packet, 0, rpack.getLength());
+
+		Hashtable<InetAddress, String> rt = null;
+		try {
+			rt = (Hashtable<InetAddress, String>)Serializer.deserialize(packet);
+		} catch (Exception e){
+			e.printStackTrace();
+		}
+		return rt;
 	}
 
 	public static void listenToSocket(){
 		Thread t = new Thread(new Runnable(){
 			public void run(){
 				while(execute){
-					byte[] buffer = new byte[4096];
-					DatagramPacket rpack = new DatagramPacket(buffer, buffer.length);
-					
-					System.out.println("waiting to recieve");
-					try {
-						localSock.receive(rpack);
-						System.out.println("Received");
-					} catch (IOException e){
-						e.printStackTrace();
-					}
 
-					byte[] packet = new byte[rpack.getLength()];
-					System.arraycopy(rpack.getData(), 0, packet, 0, rpack.getLength());
-					System.out.println(new String(packet));
+					Hashtable<InetAddress, String> updatedRT = receiveUpdate();
+
+					System.out.println();
 					//listen for updates from neighbor
 					// update RT
 					// update neighbors
@@ -93,7 +114,6 @@ class Bfclient {
 
 	}
 
-
 	public static void interpretArgs(String[] args){
 		if (args.length < 2 || (args.length-2)%3 != 0){
 			System.out.println("Incorrect arguments");
@@ -108,21 +128,18 @@ class Bfclient {
 
 		// fillout neighbor info
 		for (int i = 2; i < args.length; i += 3){
-			Hashtable<String, String> neighbor 
-				= new Hashtable<String, String>();
+			// Hashtable<String, String> neighbor 
+				// = new Hashtable<String, String>();
+			InetAddress neighborIP = null;
+			try {
+				neighborIP = InetAddress.getByName(args[i]);
+			} catch (UnknownHostException e){
+				e.printStackTrace();
+			}
 
-			neighbor.put("ip", args[i]);
-			neighbor.put("port", args[i+1]);
-			neighbor.put("weight", args[i+2]);
-			neighborsInfo.add(neighbor);
+			distanceVector.put(neighborIP, args[i+1]+"-"+args[i+2]+"-"+neighborIP+":"+args[i+1]);
 		}
 
-		// System.out.println("first ip: " + neighborsInfo.get(0).get("ip"));
-		// System.out.println("first port: " + neighborsInfo.get(0).get("port"));
-		// System.out.println("first weight: " + neighborsInfo.get(0).get("weight"));
-		// System.out.println("second ip: " + neighborsInfo.get(1).get("ip"));
-		// System.out.println("second port: " + neighborsInfo.get(1).get("port"));
-		// System.out.println("second weight: " + neighborsInfo.get(1).get("weight"));
 	}
 
 	public static void listenForCommands(){
@@ -154,23 +171,34 @@ class Bfclient {
 	private static void interpretCommand(String command){
 		String[] tokens = command.split(" ");
 		if (tokens.length == 2 && tokens[0].equals("LINKDOWN")){
-			sendPacket(neighborsInfo.get(0), "test 1 2 3".getBytes());
-		} else 
-		if (tokens.length == 2 && tokens[0].equals("LINKUP")){
+			// sendPacket(neighborsInfo.get(0), "test 1 2 3".getBytes());
+
+		} else if (tokens.length == 2 && tokens[0].equals("LINKUP")){
 			System.out.println("LINKUP " + tokens[1]);
-		} else 
-		if (tokens[0].equals("SHOWRT")){
-			System.out.println("RouteTable");
-		} else 
-		if (tokens[0].equals("CLOSE")){
+
+		} else if (tokens[0].equals("SHOWRT")){
+			printRT();
+
+		} else if (tokens[0].equals("CLOSE")){
 			System.out.println("closing!");
 			execute = false;
+
 		} else {
 			System.out.println("Incorrect command, use one of the following:");
 			System.out.println("LINKDOWN [ip]");
 			System.out.println("LINKUP [ip]");
 			System.out.println("SHOWRT");
 			System.out.println("CLOSE");
+		}
+	}
+
+	public static void printRT(){
+		System.out.println("<---Route Table--->");
+		for (InetAddress ip : distanceVector.keySet()){
+			String[] port_cost_link = distanceVector.get(ip).split("-");
+			System.out.print("Destination = " + ip+ ":" +port_cost_link[0] + ", ");
+			System.out.print("Cost = " + port_cost_link[1] + ", ");
+			System.out.println("Link = " + port_cost_link[2]);
 		}
 	}
 }
