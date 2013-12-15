@@ -1,28 +1,28 @@
 import java.io.*;
 import java.net.*;
-import java.util.Hashtable;
-import java.util.ArrayList;
-import java.util.Date;
+import java.util.*;
+
 import java.text.DateFormat;
 import java.text.SimpleDateFormat;
-import java.util.Calendar;
+
+
 
 class Bfclient {
 	static int localport;
 	static int timeout; // seconds
 	static boolean execute;
-	static long timer;
+	static long internalTimeoutTimer;
 	static DatagramSocket localSock;
 	private BufferedReader input = null;
-	static Hashtable<InetAddress, String> distanceVector = 
-		new Hashtable<InetAddress, String>();
+	static Hashtable<InetSocketAddress, String> distanceVector = 
+		new Hashtable<InetSocketAddress, String>();
 
 
-	static Hashtable<InetAddress, Hashtable<InetAddress, String>> neighborsDV =
-		new Hashtable<InetAddress, Hashtable<InetAddress, String>>();
+	static Hashtable<InetSocketAddress, Hashtable<InetSocketAddress, String>> neighborsDV =
+		new Hashtable<InetSocketAddress, Hashtable<InetSocketAddress, String>>();
 
-    static ArrayList<Hashtable<String, String>> neighborsInfo 
-            = new ArrayList<Hashtable<String, String>>();
+    static Vector<Hashtable<String, String>> neighborsInfo 
+            = new Vector<Hashtable<String, String>>();
 
 	public static void main(String[] args){
 		execute = true;
@@ -30,12 +30,9 @@ class Bfclient {
 		interpretArgs(args);
 		setupSockets();
 		listenToSocket();
-		startTimer();
 		dealWithTimeouts();
 		listenForCommands();
 	}
-
-
 
 	public static void interpretArgs(String[] args){
 		if (args.length < 2 || (args.length-2)%3 != 0){
@@ -56,7 +53,7 @@ class Bfclient {
 
 			neighbor.put("ip", args[i]);
 			neighbor.put("port", args[i+1]);
-			neighborsInfo.add(neighbor);
+			neighbor.put("timeout", String.valueOf(System.currentTimeMillis()));
 
 			InetAddress neighborIP = null;
 			try {
@@ -64,13 +61,38 @@ class Bfclient {
 			} catch (UnknownHostException e){
 				e.printStackTrace();
 			}
+			InetSocketAddress neighborAddr = 
+				new InetSocketAddress(neighborIP, Integer.parseInt(args[i+1]));
 
-			distanceVector.put(neighborIP, args[i+1]+"-"+args[i+2]+"-"+neighborIP+":"+args[i+1]);
+			neighbor.put("inet", neighborAddr.toString());
+			neighborsInfo.add(neighbor);
+			distanceVector.put(neighborAddr, args[i+1]+"-"+args[i+2]+"-"+neighborIP+":"+args[i+1]);
 		}
 	}
 
-	public static void startTimer(){
+	public static void resetTimer(){
+		internalTimeoutTimer = System.currentTimeMillis();
+	}
 
+	public static Vector<Hashtable<String, String>> checkForNeighborTimeout(
+			Vector<Hashtable<String, String>> neighborsInfo)
+	{
+		Iterator<Hashtable<String, String>> it = neighborsInfo.iterator();
+
+		while(it.hasNext()){
+			Hashtable<String, String> neighbor = it.next();
+			long neighborTimeout = Long.parseLong(neighbor.get("timeout"));
+
+			if (System.currentTimeMillis() - neighborTimeout > 3*timeout*1000){
+				// it.remove();
+
+				int port = Integer.parseInt(neighbor.get("port"));
+				InetSocketAddress n = new InetSocketAddress(neighbor.get("ip"), port);
+				String[] port_cost_link = distanceVector.get(n).split("-");
+				distanceVector.put(n, port+"-inf-"+port_cost_link[2]);
+			}
+		}
+		return neighborsInfo;
 	}
 
 	public static void setupSockets(){
@@ -90,9 +112,8 @@ class Bfclient {
 			public void run(){
 				while(execute){
 
-					Hashtable<InetAddress, String> updatedRT = receiveUpdate();
-
-					System.out.println("received update: ");
+					Hashtable<InetSocketAddress, String> updatedRT = receiveUpdate();
+					System.out.println("received update from: " );
 					//updateTimer();
 					printRT(updatedRT);
 					//listen for updates from neighbor
@@ -107,10 +128,16 @@ class Bfclient {
 	public static void dealWithTimeouts(){
 		Thread t = new Thread(new Runnable(){
 			public void run(){
-				int count = 0;
-				while(execute){
-					if (true){
 
+				resetTimer();
+
+				while(execute){
+
+					neighborsInfo = checkForNeighborTimeout(neighborsInfo);
+
+					if (internalTimeoutOccured()){
+						System.out.println("we've timedout");
+						updateNeighbors();
 					}
 
 					// if timeout,
@@ -119,6 +146,15 @@ class Bfclient {
 			}
 		});
 		t.start();
+	}
+
+	public static boolean internalTimeoutOccured(){
+		if (System.currentTimeMillis() - internalTimeoutTimer > timeout*1000){
+			resetTimer();
+			return true;
+		} else {
+			return false;
+		}
 	}
 
 	public static void updateNeighbors(){
@@ -148,14 +184,18 @@ class Bfclient {
 
 	@SuppressWarnings("unchecked") // java doesn't trust me deserializing
 								   // distanceVectors from my other class
-	public static Hashtable<InetAddress, String> receiveUpdate() {
+	public static Hashtable<InetSocketAddress, String> receiveUpdate() {
 		byte[] buffer = new byte[4096];
 		DatagramPacket rpack = new DatagramPacket(buffer, buffer.length);
 		
 		System.out.println("waiting to recieve");
 		try {
 			localSock.receive(rpack);
-			System.out.println("Received RT from ");
+			
+			InetSocketAddress senderAddr = (InetSocketAddress)rpack.getSocketAddress();
+			System.out.println("Received RT from " + senderAddr);
+			updateNeighborTimout(senderAddr);
+
 		} catch (IOException e){
 			e.printStackTrace();
 		}
@@ -163,15 +203,27 @@ class Bfclient {
 		byte[] packet = new byte[rpack.getLength()];
 		System.arraycopy(rpack.getData(), 0, packet, 0, rpack.getLength());
 
-		Hashtable<InetAddress, String> rt = null;
+		Hashtable<InetSocketAddress, String> rt = null;
 		try {
-			rt = (Hashtable<InetAddress, String>)Serializer.deserialize(packet);
+			rt = (Hashtable<InetSocketAddress, String>)Serializer.deserialize(packet);
 		} catch (Exception e){
 			e.printStackTrace();
 		}
 		return rt;
 	}
 
+
+	public static void updateNeighborTimout(InetSocketAddress n){
+		Iterator<Hashtable<String, String>> it = neighborsInfo.iterator();
+		while (it.hasNext()){
+			Hashtable<String, String> neighbor = it.next();
+			int port = Integer.parseInt(neighbor.get("port"));
+			InetSocketAddress nSock = new InetSocketAddress(neighbor.get("ip"), port);
+			if (n.equals(nSock)){
+				neighbor.put("timeout", String.valueOf(System.currentTimeMillis()));
+			}
+		}
+	}
 
 	public static void sendPacket(InetAddress remote_addr, int port, byte[] data){
 
@@ -238,18 +290,22 @@ class Bfclient {
 		}
 	}
 
-	public static void printRT(Hashtable<InetAddress, String> rt){
+	public static void printRT(Hashtable<InetSocketAddress, String> rt){
 		DateFormat dateFormat = new SimpleDateFormat("HH:mm:ss");
 		Date date = new Date();
 		// System.out.println(dateFormat.format(date));
 
 		System.out.println("<---Route Table--->");
 		System.out.println("Time: " + dateFormat.format(date) + " Distance vector list is:");
-		for (InetAddress ip : rt.keySet()){
-			String[] port_cost_link = rt.get(ip).split("-");
-			System.out.print("Destination = " + ip+ ":" +port_cost_link[0] + ", ");
+		for (InetSocketAddress addr : rt.keySet()){
+			String[] port_cost_link = rt.get(addr).split("-");
+			System.out.print("Destination = " + addr + ", ");
 			System.out.print("Cost = " + port_cost_link[1] + ", ");
 			System.out.println("Link = " + port_cost_link[2]);
 		}
+	}
+
+	public static void p(Object o){
+		System.out.println(o);
 	}
 }
