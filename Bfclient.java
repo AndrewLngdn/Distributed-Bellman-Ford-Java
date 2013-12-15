@@ -242,17 +242,18 @@ class Bfclient {
 	}
 
 	public static void updateNeighbors(){
-		for (Hashtable<String, String> neighbor : neighborsInfo){
-			String ip_string = neighbor.get("ip");
+		Set<Hashtable<InetSocketAddress, String>> neighbors = neighborsDV.keySet();
+		for (InetSocketAddress neighborAddr : neighbors){
+			// String ip_string = neighborAddr.getAddress();
 
-			InetAddress ip = null;
-			try {
-				ip = InetAddress.getByName(ip_string);
-			} catch (UnknownHostException e){
-				e.printStackTrace();
-			}
+			InetAddress ip = neighborAddr.getAddress();
+			// try {
+				// 
+			// } catch (UnknownHostException e){
+				// e.printStackTrace();
+			// }
 
-			int port = Integer.parseInt(neighbor.get("port"));
+			int port = neighborAddr.getPort();
 
 			// System.out.println("sending DV to " + ip + ":" + port);
 
