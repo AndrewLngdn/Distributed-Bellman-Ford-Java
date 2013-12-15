@@ -11,8 +11,12 @@ class Bfclient {
 	private BufferedReader input = null;
 	static Hashtable<InetAddress, String> distanceVector = 
 		new Hashtable<InetAddress, String>();
+
 	static Hashtable<InetAddress, Hashtable<InetAddress, String>> neighborsDV =
 		new Hashtable<InetAddress, Hashtable<InetAddress, String>>();
+
+    static ArrayList<Hashtable<String, String>> neighborsInfo 
+            = new ArrayList<Hashtable<String, String>>();
 
 	public static void main(String[] args){
 		execute = true;
@@ -24,6 +28,42 @@ class Bfclient {
 		listenForCommands();
 	}
 
+
+
+	public static void interpretArgs(String[] args){
+		if (args.length < 2 || (args.length-2)%3 != 0){
+			System.out.println("Incorrect arguments");
+			System.out.println("java Bfclient localport timeout [ipaddress1 port1 weight1 ...]");
+			System.exit(1);
+		} else { 
+			localport = Integer.parseInt(args[0]);
+			timeout = Integer.parseInt(args[1]);
+			System.out.println("localport: " + localport);
+			System.out.println("timeout: " + timeout);
+		}
+
+		// fillout neighbor info
+		for (int i = 2; i < args.length; i += 3){
+			Hashtable<String, String> neighbor 
+				= new Hashtable<String, String>();
+
+			neighbor.put("ip", args[i]);
+			neighbor.put("port", args[i+1]);
+			neighborsInfo.add(neighbor);
+
+			InetAddress neighborIP = null;
+			try {
+				neighborIP = InetAddress.getByName(args[i]);
+			} catch (UnknownHostException e){
+				e.printStackTrace();
+			}
+
+			distanceVector.put(neighborIP, args[i+1]+"-"+args[i+2]+"-"+neighborIP+":"+args[i+1]);
+		}
+
+	}
+
+
 	public static void setupSockets(){
 		//listening socket
 		try {
@@ -33,6 +73,62 @@ class Bfclient {
 			System.out.println("couldn't bind to port, choose again");
 			execute = false;
 			System.exit(1);
+		}
+	}
+
+	public static void listenToSocket(){
+		Thread t = new Thread(new Runnable(){
+			public void run(){
+				while(execute){
+
+					Hashtable<InetAddress, String> updatedRT = receiveUpdate();
+
+					System.out.println("received update: ");
+					printRT(updatedRT);
+					//listen for updates from neighbor
+					// update RT
+					// update neighbors
+				}
+			}
+		});
+		t.start();
+	}
+
+	public static void dealWithTimeouts(){
+		Thread t = new Thread(new Runnable(){
+			public void run(){
+				int count = 0;
+				while(execute){
+					// if timeout,
+					// update your neighbors
+				}
+			}
+		});
+		t.start();
+	}
+
+	public static void updateNeighbors(){
+		for (Hashtable<String, String> neighbor : neighborsInfo){
+			String ip_string = neighbor.get("ip");
+
+			InetAddress ip = null;
+			try {
+				ip = InetAddress.getByName(ip_string);
+			} catch (UnknownHostException e){
+				e.printStackTrace();
+			}
+
+			int port = Integer.parseInt(neighbor.get("port"));
+
+			System.out.println("sending DV to " + ip + ":" + port);
+
+			byte[] bytes = null;
+			try {
+				bytes = Serializer.serialize(distanceVector);
+			} catch (IOException e){
+				e.printStackTrace();
+			}
+			sendPacket(ip, port, bytes);
 		}
 	}
 
@@ -62,45 +158,9 @@ class Bfclient {
 		return rt;
 	}
 
-	public static void listenToSocket(){
-		Thread t = new Thread(new Runnable(){
-			public void run(){
-				while(execute){
 
-					Hashtable<InetAddress, String> updatedRT = receiveUpdate();
+	public static void sendPacket(InetAddress remote_addr, int port, byte[] data){
 
-					System.out.println();
-					//listen for updates from neighbor
-					// update RT
-					// update neighbors
-				}
-			}
-		});
-		t.start();
-	}
-
-	public static void dealWithTimeouts(){
-		Thread t = new Thread(new Runnable(){
-			public void run(){
-				int count = 0;
-				while(execute){
-					// if timeout,
-					// send copy of distance vector to neighbors
-				}
-			}
-		});
-		t.start();
-	}
-
-	public static void sendPacket(Hashtable<String, String> neighbor, byte[] data){
-		InetAddress remote_addr = null;
-		try {
-			remote_addr = InetAddress.getByName(neighbor.get("ip"));
-		} catch (UnknownHostException e){
-			e.printStackTrace();
-		}
-
-		int port = Integer.parseInt(neighbor.get("port"));
 		System.out.println("sending packet to " + remote_addr);
 		System.out.println("at port " + port);
 
@@ -111,36 +171,8 @@ class Bfclient {
 		} catch (IOException e){
 			e.printStackTrace();
 		}
-
 	}
 
-	public static void interpretArgs(String[] args){
-		if (args.length < 2 || (args.length-2)%3 != 0){
-			System.out.println("Incorrect arguments");
-			System.out.println("java Bfclient localport timeout [ipaddress1 port1 weight1 ...]");
-			System.exit(1);
-		} else { 
-			localport = Integer.parseInt(args[0]);
-			timeout = Integer.parseInt(args[1]);
-			System.out.println("localport: " + localport);
-			System.out.println("timeout: " + timeout);
-		}
-
-		// fillout neighbor info
-		for (int i = 2; i < args.length; i += 3){
-			// Hashtable<String, String> neighbor 
-				// = new Hashtable<String, String>();
-			InetAddress neighborIP = null;
-			try {
-				neighborIP = InetAddress.getByName(args[i]);
-			} catch (UnknownHostException e){
-				e.printStackTrace();
-			}
-
-			distanceVector.put(neighborIP, args[i+1]+"-"+args[i+2]+"-"+neighborIP+":"+args[i+1]);
-		}
-
-	}
 
 	public static void listenForCommands(){
 		BufferedReader stdIn = new BufferedReader(new InputStreamReader(System.in));
@@ -171,13 +203,13 @@ class Bfclient {
 	private static void interpretCommand(String command){
 		String[] tokens = command.split(" ");
 		if (tokens.length == 2 && tokens[0].equals("LINKDOWN")){
-			// sendPacket(neighborsInfo.get(0), "test 1 2 3".getBytes());
+			updateNeighbors();
 
 		} else if (tokens.length == 2 && tokens[0].equals("LINKUP")){
 			System.out.println("LINKUP " + tokens[1]);
 
 		} else if (tokens[0].equals("SHOWRT")){
-			printRT();
+			printRT(distanceVector);
 
 		} else if (tokens[0].equals("CLOSE")){
 			System.out.println("closing!");
@@ -185,17 +217,17 @@ class Bfclient {
 
 		} else {
 			System.out.println("Incorrect command, use one of the following:");
-			System.out.println("LINKDOWN [ip]");
-			System.out.println("LINKUP [ip]");
+			System.out.println("LINKDOWN [ip:port]");
+			System.out.println("LINKUP [ip:port]");
 			System.out.println("SHOWRT");
 			System.out.println("CLOSE");
 		}
 	}
 
-	public static void printRT(){
+	public static void printRT(Hashtable<InetAddress, String> rt){
 		System.out.println("<---Route Table--->");
-		for (InetAddress ip : distanceVector.keySet()){
-			String[] port_cost_link = distanceVector.get(ip).split("-");
+		for (InetAddress ip : rt.keySet()){
+			String[] port_cost_link = rt.get(ip).split("-");
 			System.out.print("Destination = " + ip+ ":" +port_cost_link[0] + ", ");
 			System.out.print("Cost = " + port_cost_link[1] + ", ");
 			System.out.println("Link = " + port_cost_link[2]);
