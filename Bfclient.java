@@ -2,15 +2,21 @@ import java.io.*;
 import java.net.*;
 import java.util.Hashtable;
 import java.util.ArrayList;
+import java.util.Date;
+import java.text.DateFormat;
+import java.text.SimpleDateFormat;
+import java.util.Calendar;
 
 class Bfclient {
 	static int localport;
 	static int timeout; // seconds
 	static boolean execute;
+	static long timer;
 	static DatagramSocket localSock;
 	private BufferedReader input = null;
 	static Hashtable<InetAddress, String> distanceVector = 
 		new Hashtable<InetAddress, String>();
+
 
 	static Hashtable<InetAddress, Hashtable<InetAddress, String>> neighborsDV =
 		new Hashtable<InetAddress, Hashtable<InetAddress, String>>();
@@ -24,6 +30,7 @@ class Bfclient {
 		interpretArgs(args);
 		setupSockets();
 		listenToSocket();
+		startTimer();
 		dealWithTimeouts();
 		listenForCommands();
 	}
@@ -60,9 +67,11 @@ class Bfclient {
 
 			distanceVector.put(neighborIP, args[i+1]+"-"+args[i+2]+"-"+neighborIP+":"+args[i+1]);
 		}
-
 	}
 
+	public static void startTimer(){
+
+	}
 
 	public static void setupSockets(){
 		//listening socket
@@ -84,6 +93,7 @@ class Bfclient {
 					Hashtable<InetAddress, String> updatedRT = receiveUpdate();
 
 					System.out.println("received update: ");
+					//updateTimer();
 					printRT(updatedRT);
 					//listen for updates from neighbor
 					// update RT
@@ -99,6 +109,10 @@ class Bfclient {
 			public void run(){
 				int count = 0;
 				while(execute){
+					if (true){
+
+					}
+
 					// if timeout,
 					// update your neighbors
 				}
@@ -225,7 +239,12 @@ class Bfclient {
 	}
 
 	public static void printRT(Hashtable<InetAddress, String> rt){
+		DateFormat dateFormat = new SimpleDateFormat("HH:mm:ss");
+		Date date = new Date();
+		// System.out.println(dateFormat.format(date));
+
 		System.out.println("<---Route Table--->");
+		System.out.println("Time: " + dateFormat.format(date) + " Distance vector list is:");
 		for (InetAddress ip : rt.keySet()){
 			String[] port_cost_link = rt.get(ip).split("-");
 			System.out.print("Destination = " + ip+ ":" +port_cost_link[0] + ", ");
