@@ -10,21 +10,25 @@ import java.text.SimpleDateFormat;
 class Bfclient {
 	static int localport;
 	static int timeout; // seconds
-	static boolean execute;
-	static long internalTimeoutTimer;
-	static DatagramSocket localSock;
+	static boolean execute; // for thread loops
+	static long internalTimeoutTimer; // for neighbor times
+	static DatagramSocket localSock;	// socket 
 	private BufferedReader input = null;
-	static Hashtable<InetSocketAddress, String> distanceVector = 
+	static Hashtable<InetSocketAddress, String> distanceVector =  // this is the node's distance vector
 		new Hashtable<InetSocketAddress, String>();
-	static ArrayList<InetSocketAddress> destinations = 
+	static ArrayList<InetSocketAddress> destinations =  // destinations for BF algo
 		new ArrayList<InetSocketAddress>();
+	static Hashtable<InetSocketAddress, Double> neighborCost = // list of original costs to neighbors
+		new Hashtable<InetSocketAddress, Double>();
+	static Hashtable<InetSocketAddress, Boolean> neighborLinkDown = // linkdown keeper-tracker
+		new Hashtable<InetSocketAddress, Boolean>();
 
-
+	//holds the DV of our neighbors
 	static Hashtable<InetSocketAddress, Hashtable<InetSocketAddress, String>> neighborsDV =
 		new Hashtable<InetSocketAddress, Hashtable<InetSocketAddress, String>>();
 
-    static Vector<Hashtable<String, String>> neighborsInfo 
-            = new Vector<Hashtable<String, String>>();
+    static ArrayList<Hashtable<String, String>> neighborsInfo 
+            = new ArrayList<Hashtable<String, String>>();
 
 	public static void main(String[] args){
 		execute = true;
@@ -36,6 +40,7 @@ class Bfclient {
 		listenForCommands();
 	}
 
+	// adds neighbors to Data Structures above
 	public static void interpretArgs(String[] args){
 		if (args.length < 2 || (args.length-2)%3 != 0){
 			System.out.println("Incorrect arguments");
@@ -66,40 +71,66 @@ class Bfclient {
 			}
 			InetSocketAddress neighborAddr = 
 				new InetSocketAddress(neighborIP, Integer.parseInt(args[i+1]));
+			neighborCost.put(neighborAddr, Double.parseDouble(args[i+2]));
 
 			neighbor.put("inet", neighborAddr.toString());
-			neighborsInfo.add(neighbor);
+			synchronized(neighborsInfo){
+				neighborsInfo.add(neighbor);
+
+			}
+			Hashtable<InetSocketAddress, String> temp = new Hashtable<InetSocketAddress, String>();
+
+			synchronized(neighborsDV){
+				neighborsDV.put(neighborAddr, temp);
+			}
+
 			distanceVector.put(neighborAddr, args[i+1]+"-"+args[i+2]+"-"+neighborIP+":"+args[i+1]);
+
 		}
 		InetSocketAddress thisHost = new InetSocketAddress("localhost", localport);
 		distanceVector.put(thisHost, localport+"-"+0+"-"+thisHost);
 	}
 
-	public static void resetTimer(){
-		internalTimeoutTimer = System.currentTimeMillis();
-	}
 
-	public static Vector<Hashtable<String, String>> checkForNeighborTimeout(
-			Vector<Hashtable<String, String>> neighborsInfo)
+	// Sees if a neighbor has timed out
+	public static void checkForNeighborTimeout()
 	{
-		Iterator<Hashtable<String, String>> it = neighborsInfo.iterator();
+		synchronized(neighborsInfo) {
+			Iterator<Hashtable<String, String>> it = neighborsInfo.iterator();
 
-		while(it.hasNext()){
-			Hashtable<String, String> neighbor = it.next();
-			long neighborTimeout = Long.parseLong(neighbor.get("timeout"));
-
-			if (System.currentTimeMillis() - neighborTimeout > 3*timeout*1000){
+			while(it.hasNext()){
+				Hashtable<String, String> neighbor = it.next();
+				long neighborTimeout = Long.parseLong(neighbor.get("timeout"));
 
 				int port = Integer.parseInt(neighbor.get("port"));
-				InetSocketAddress n = new InetSocketAddress(neighbor.get("ip"), port);
-				String[] port_cost_link = distanceVector.get(n).split("-");
-				distanceVector.put(n, port+ "-" + Double.MAX_VALUE + "-" + port_cost_link[2]);
+				String ip = neighbor.get("ip");
+				if (ip.split("/").length == 1){
+					ip = ip.split("/")[0];
+				} else {
+					ip = ip.split("/")[1];
+				}
+				InetAddress addr = null;
 
-				p("neighbor Timeout " + n);
+				try {
+					addr = InetAddress.getByName(ip);
+				}catch (UnknownHostException e){
+					e.printStackTrace();
+				}
+
+				InetSocketAddress n = new InetSocketAddress(addr, port);
+
+				if (distanceVector.get(n) == null){
+					return;
+				}
+				String[] port_cost_link = distanceVector.get(n).split("-");
+
+				if (System.currentTimeMillis() - neighborTimeout > 3*timeout*1000){
+					distanceVector.put(n, n.getPort()+ "-" + Double.MAX_VALUE + "-" + n);
+				}
 			}
 		}
-		return neighborsInfo;
 	}
+	static int count = -1;
 
 	public static void setupSockets(){
 		//listening socket
@@ -119,109 +150,114 @@ class Bfclient {
 				while(execute){
 
 					Hashtable<InetSocketAddress, String> neighborRT = receiveUpdate();
-					// System.out.println("received update from: " );
-					//updateTimer();
-					printRT(distanceVector);
 					updateRT();
-					// update neighbors
 				}
 			}
 		});
 		t.start();
 	}
 
+	// BelmanFord Algorithm
 	public static void updateRT(){
-		// Set<InetSocketAddress> destinations = distanceVector.keySet();
-		// Iterator<Hashtable<InetSocketAddress, String>> it = distanceVector.iterator();
 		// for each dest that i know about,
 		// look through all the neighbors
 		// my cost to them is minv{c(x,v) + Dv(y)}
 		// and the link is through the minimum one
-		ArrayList<InetSocketAddress> neighborsAddrs = new ArrayList<InetSocketAddress>();
+		synchronized(neighborsDV){
 
-		for (Hashtable<String, String> neighbor : neighborsInfo){
-			int port = Integer.parseInt(neighbor.get("port"));
-			InetSocketAddress n = new InetSocketAddress(neighbor.get("ip"), port);
-			neighborsAddrs.add(n);
-		}
+			ArrayList<InetSocketAddress> neighborsAddrs = new ArrayList<InetSocketAddress>();
+			Set<InetSocketAddress> nDVaddrs = neighborsDV.keySet();
 
-		// ArrayList<InetSocketAddress> destinations = new ArrayList<InetSocketAddress>();
-
-		for (InetSocketAddress neighbor : neighborsAddrs){
-			Set<InetSocketAddress> neighborsNeighbors = distanceVector.keySet();
-			for (InetSocketAddress d : neighborsNeighbors)
-			if (!destinations.contains(d)){
-				destinations.add(d);
+			for (InetSocketAddress neighbor : nDVaddrs){
+				String n = neighbor.toString();
+				neighborsAddrs.add(neighbor);
 			}
-		}
-		if (destinations.size() == 1)
-			return;
 
-		Iterator<InetSocketAddress> it = neighborsAddrs.iterator();
 
-		for (InetSocketAddress dest : destinations){
-			double mincost = Double.MAX_VALUE;
-			// p(mincost);
-			InetSocketAddress link = dest;
-			String dport = "";
-
-				
-				InetSocketAddress localISA = new InetSocketAddress("localhost", localport);
-				// p(dest.equals(localISA) + "!!!!!!!!!!!!!!!!!!!!!!!!!!!");
-				// p(localISA);
-				// p(dest);
-				// p("!!!!!!!!!!!!!!");
-
-			if (dest.equals(localISA)){
-
-				continue;
-			} else {
-				p("CHECKING COST TO " + dest);
-			}
 			for (InetSocketAddress neighbor : neighborsAddrs){
-				p("trying to get " + neighbor);
-				if (distanceVector.get(neighbor) == null)
-					continue;
-				String[] port_cost_link = distanceVector.get(neighbor).split("-");
-
-				double nCost = Double.parseDouble(port_cost_link[1]);
-				p("nCost to neighbor " + nCost);
-				Hashtable<InetSocketAddress, String> n = neighborsDV.get(neighbor);
-
-				if (n == null) {
-					p("breaking, neighbor is null");
-					continue;
-				}
-
-				String d_info = n.get(dest);
-				if (d_info == null){
-					p("breaking");
-					continue;
-				}
-				String[] dest_port_cost_link = d_info.split("-");
-				dport = dest_port_cost_link[0];
-				double vCost = Double.parseDouble(dest_port_cost_link[1]);
-				if (nCost + vCost < mincost){
-					mincost = nCost+vCost;
-					link = neighbor;
-					p("settingminCost to " + mincost);
+				Set<InetSocketAddress> neighborsNeighbors = distanceVector.keySet();
+				for (InetSocketAddress d : neighborsNeighbors)
+				if (!destinations.contains(d)){
+					destinations.add(d);
 				}
 			}
-			p("setting distance to dest to " + mincost);
-			p("dest: " + link);
-			distanceVector.put(dest, dport + "-" + mincost + "-" + link);
+
+			if (destinations.size() == 1)
+				return;
+
+			Iterator<InetSocketAddress> it = neighborsAddrs.iterator();
+
+			for (InetSocketAddress dest : destinations){
+				double mincost = Double.MAX_VALUE;
+				InetSocketAddress link = dest;
+				String dport = "";
+
+					
+				InetSocketAddress localISA = new InetSocketAddress("localhost", localport);
+
+				if (dest.equals(localISA)){
+
+					continue;
+				} else {
+					p("CHECKING COST TO " + dest);
+				}
+				for (InetSocketAddress neighbor : neighborsAddrs){
+					p("trying to get " + dest + "through " + neighbor);
+					if (distanceVector.get(neighbor) == null){
+						p("neighbor isn't in distnace vector");
+						continue;
+					}
+					Hashtable<InetSocketAddress, String> n = neighborsDV.get(neighbor);
+					String[] port_cost_link = distanceVector.get(neighbor).split("-");
+					double RTcost = Double.parseDouble(port_cost_link[1]);
+					if (RTcost == Double.MAX_VALUE){
+						continue;
+						// nCost = Double.MAX_VALUE;
+					}
+					double nCost = neighborCost.get(neighbor);
+					p("nCost to " + neighbor  + " is " + nCost);
+
+
+					if (n == null) {
+						p("breaking, neighbor is null");
+						continue;
+					}
+
+					String d_info = n.get(dest);
+					p("DESTINATION IS " + d_info + " SHOULD BE " + dest);
+					if (d_info == null){
+						p("breaking, d_info is null");
+						continue;
+					}
+					String[] dest_port_cost_link = d_info.split("-");
+					dport = dest_port_cost_link[0];
+					p("cost through neighbor " + neighbor + " is " +dest_port_cost_link[1]);
+					double vCost = Double.parseDouble(dest_port_cost_link[1]);
+
+					if (nCost + vCost < mincost){
+						mincost = nCost+vCost;
+						link = neighbor;
+						p("settingminCost to " + mincost);
+					}
+				}
+				p("adding to DV for dest : " + dest + dport + "-" + mincost + "-" + link);
+				distanceVector.put(dest, dport + "-" + mincost + "-" + link);
+			}
 		}
 	}
 
+	// Thread for timeouts
 	public static void dealWithTimeouts(){
 		Thread t = new Thread(new Runnable(){
 			public void run(){
+				updateNeighbors();
 
-				resetTimer();
+				internalTimeoutTimer = System.currentTimeMillis();
+				
 
 				while(execute){
 
-					neighborsInfo = checkForNeighborTimeout(neighborsInfo);
+					checkForNeighborTimeout();
 
 					if (internalTimeoutOccured()){
 						updateNeighbors();
@@ -233,53 +269,60 @@ class Bfclient {
 	}
 
 	public static boolean internalTimeoutOccured(){
+		
 		if (System.currentTimeMillis() - internalTimeoutTimer > timeout*1000){
-			resetTimer();
+			// System.out.println("internal timeout");
+			internalTimeoutTimer = System.currentTimeMillis();
 			return true;
 		} else {
 			return false;
 		}
 	}
 
+	// send RT to neighbors 
 	public static void updateNeighbors(){
-		Set<Hashtable<InetSocketAddress, String>> neighbors = neighborsDV.keySet();
-		for (InetSocketAddress neighborAddr : neighbors){
-			// String ip_string = neighborAddr.getAddress();
+		synchronized(neighborsDV){
 
-			InetAddress ip = neighborAddr.getAddress();
-			// try {
-				// 
-			// } catch (UnknownHostException e){
-				// e.printStackTrace();
-			// }
+			Set<InetSocketAddress> neighbors = neighborsDV.keySet();
 
-			int port = neighborAddr.getPort();
+			for (InetSocketAddress neighborAddr : neighbors){
 
-			// System.out.println("sending DV to " + ip + ":" + port);
 
-			byte[] bytes = null;
-			try {
-				bytes = Serializer.serialize(distanceVector);
-			} catch (IOException e){
-				e.printStackTrace();
+				InetAddress ip = neighborAddr.getAddress();
+
+				int port = neighborAddr.getPort();
+				String[] sCost = distanceVector.get(neighborAddr).split("-");
+				double cost = Double.parseDouble(sCost[1]);
+
+				byte[] bytes = null;
+				try {
+					bytes = Serializer.serialize(distanceVector);
+				} catch (IOException e){
+					e.printStackTrace();
+				}
+				sendPacket(ip, port, bytes);
 			}
-			sendPacket(ip, port, bytes);
 		}
 	}
 
+
+	// recieve update and deserialze DV
 	@SuppressWarnings("unchecked") // java doesn't trust me deserializing
 								   // distanceVectors from my other class
 	public static Hashtable<InetSocketAddress, String> receiveUpdate() {
 		byte[] buffer = new byte[4096];
 		DatagramPacket rpack = new DatagramPacket(buffer, buffer.length);
 		
-		// System.out.println("waiting to recieve");
 		InetSocketAddress senderAddr = null;
 		try {
+
 			localSock.receive(rpack);
 			
 			senderAddr = (InetSocketAddress)rpack.getSocketAddress();
-			// System.out.println("Received RT from " + senderAddr);
+			p("Received RT from " + senderAddr);
+			if (neighborLinkDown.containsKey(senderAddr)){
+				return null;
+			}
 			updateNeighborTimout(senderAddr);
 
 		} catch (IOException e){
@@ -302,9 +345,19 @@ class Bfclient {
 		Set<InetSocketAddress> dests = rt.keySet();
 		for (InetSocketAddress address : dests){
 			if (address.equals(localISA)){
-				p("Neighbor attached!!!!!! ");
+				p("localISA " + localISA);
+				// p("");
+
 				String cost = rt.get(localISA).split("-")[1];
-				distanceVector.put(senderAddr,rpack.getPort()+"-"+cost+"-"+senderAddr);
+				if (!distanceVector.contains(senderAddr)){
+					p("SENDER ADDRESS key : " + senderAddr);
+
+					updateNeighborTimout(senderAddr);
+					distanceVector.put(senderAddr,rpack.getPort()+"-"+cost+"-"+senderAddr);
+					
+				} else {
+					p("didn't add found neighbor");
+				}
 				Hashtable<String, String> neighbor 
 					= new Hashtable<String, String>();
 				neighbor.put("ip", senderAddr.getAddress().toString());
@@ -312,37 +365,80 @@ class Bfclient {
 				neighbor.put("timeout", String.valueOf(System.currentTimeMillis()));
 				neighbor.put("initCost", cost.toString());
 				neighbor.put("inet", senderAddr.toString());
-				neighborsInfo.add(neighbor);
+				synchronized(neighborsInfo){
+					Set<InetSocketAddress> addresses = neighborCost.keySet();
+					Iterator<InetSocketAddress> it = addresses.iterator();
+					boolean containsFlag = false;
+					while (it.hasNext()){
+						InetSocketAddress nei = it.next();
+						if (nei.equals(senderAddr)){
+							containsFlag = true;
+							// System.exit(1);
+						}
+					}
+					if (containsFlag == false){
+						neighborCost.put(senderAddr, Double.parseDouble(cost));
+					} 
+					addNeighborToInfo(neighbor);
+				}
 			}
-
+			p("adding destination " + address);
 			if (!destinations.contains(address)){
 				destinations.add(address);
 
 			}			
 		}
+		synchronized(neighborsDV){
+			p("putting " + senderAddr + "in neighborsDV ");
 
+			neighborsDV.put(senderAddr, rt);
+			return rt;
 
-		neighborsDV.put(senderAddr, rt);
-		return rt;
+		}
+
 	}
 
+	// add neighbor to neighborInfo
+	public static void addNeighborToInfo(Hashtable<String, String> neighbor){
+		boolean containsFlag = false;
+		for (Hashtable<String, String> n:neighborsInfo){
+			if (n.get("inet").equals(neighbor.get("inet"))){
+				containsFlag = true;
+			}
+		}
+		if (containsFlag == false){
+			p("ignoring duplicate");
+			neighborsInfo.add(neighbor);
+		}
 
+	}
+	static InetSocketAddress temp;
+
+
+	// update neighbor timeout if we get an RT from them
 	public static void updateNeighborTimout(InetSocketAddress n){
-		Iterator<Hashtable<String, String>> it = neighborsInfo.iterator();
-		while (it.hasNext()){
-			Hashtable<String, String> neighbor = it.next();
-			int port = Integer.parseInt(neighbor.get("port"));
-			InetSocketAddress nSock = new InetSocketAddress(neighbor.get("ip"), port);
-			if (n.equals(nSock)){
-				neighbor.put("timeout", String.valueOf(System.currentTimeMillis()));
+		synchronized(neighborsInfo){
+			Iterator<Hashtable<String, String>> it = neighborsInfo.iterator();
+			while (it.hasNext()){
+				Hashtable<String, String> neighbor = it.next();
+				int port = Integer.parseInt(neighbor.get("port"));
+				String ip = "";
+				if (neighbor.get("ip").split("/").length == 1){
+					ip = neighbor.get("ip").split("/")[0];
+				} else {
+					ip = neighbor.get("ip").split("/")[1];
+				}
+				InetSocketAddress nSock = new InetSocketAddress(ip, port);
+				if (n.equals(nSock)){
+					p("updating timeout for " + n);
+					neighbor.put("timeout", String.valueOf(System.currentTimeMillis()));
+				}
 			}
 		}
 	}
 
+	// Send a packet
 	public static void sendPacket(InetAddress remote_addr, int port, byte[] data){
-
-		// System.out.println("sending packet to " + remote_addr);
-		// System.out.println("at port " + port);
 
 		DatagramPacket spacket = new DatagramPacket(data, data.length,
 													remote_addr, port);
@@ -353,7 +449,7 @@ class Bfclient {
 		}
 	}
 
-
+	// Look for commands 
 	public static void listenForCommands(){
 		BufferedReader stdIn = new BufferedReader(new InputStreamReader(System.in));
 		execute = true;
@@ -366,7 +462,9 @@ class Bfclient {
 
 		while(execute){
 			try {
-				interpretCommand(stdIn.readLine());
+				// synchronized(distanceVector){
+					interpretCommand(stdIn.readLine());
+				// }
 			} catch (IOException e){
 				System.err.println(e);
 			}
@@ -380,6 +478,7 @@ class Bfclient {
 		System.exit(0);
 	}
 
+	// Interpret input
 	private static void interpretCommand(String command){
 		String[] tokens = command.split(" ");
 		if (tokens.length == 2 && tokens[0].equals("LINKDOWN")){
@@ -387,12 +486,41 @@ class Bfclient {
 			InetSocketAddress addr = new InetSocketAddress(ip_port[0], 
 										Integer.parseInt(ip_port[1])
 										);
+			neighborLinkDown.put(addr, true);
+			System.out.println("Taking down link to " + addr);
+
+			if (distanceVector.get(addr) == null){
+				System.out.println("incorrect ip:port");
+				return;
+			}
 			String[] port_cost_link = distanceVector.get(addr).split("-");
 			String updatedDistance = ip_port[1]+"-"+Double.MAX_VALUE+"-"+port_cost_link[2];
 			distanceVector.put(addr, updatedDistance);
+			System.out.println("New RT");
+			printRT(distanceVector);
 
 		} else if (tokens.length == 2 && tokens[0].equals("LINKUP")){
-			System.out.println("LINKUP " + tokens[1]);
+			String[] ip_port = tokens[1].split(":");
+			InetSocketAddress addr = new InetSocketAddress(ip_port[0], 
+										Integer.parseInt(ip_port[1])
+										);
+			neighborLinkDown.put(addr, false);
+			System.out.println("Restoring link to " + addr);
+			if (distanceVector.get(addr) == null){
+				System.out.println("incorrect ip:port");
+				return;
+			}
+
+			double oldCost = neighborCost.get(addr);
+			System.out.println(oldCost);
+			// System.exit(0);
+			String[] port_cost_link = distanceVector.get(addr).split("-");
+			String updatedDistance = ip_port[1]+"-"+oldCost+"-"+port_cost_link[2];
+			System.out.println(distanceVector.remove(addr));
+			System.out.println(updatedDistance);
+			distanceVector.put(addr, updatedDistance);
+			System.out.println("New RT");
+			printRT(distanceVector);
 
 		} else if (tokens[0].equals("SHOWRT")){
 			printRT(distanceVector);
@@ -410,10 +538,10 @@ class Bfclient {
 		}
 	}
 
+	// Print our routeTable
 	public static void printRT(Hashtable<InetSocketAddress, String> rt){
 		DateFormat dateFormat = new SimpleDateFormat("HH:mm:ss");
 		Date date = new Date();
-		// System.out.println(dateFormat.format(date));
 
 		System.out.println("<---Route Table--->");
 		System.out.println("Time: " + dateFormat.format(date) + " Distance vector list is:");
@@ -426,6 +554,6 @@ class Bfclient {
 	}
 
 	public static void p(Object o){
-		System.out.println(o);
+		// System.out.println(o);
 	}
 }

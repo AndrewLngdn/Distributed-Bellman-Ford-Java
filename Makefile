@@ -3,7 +3,7 @@
 .java.class:
 	javac $<
 
-CLASSES = Bfclient.class
+CLASSES = Bfclient.class Serializer.class
 
 all: $(CLASSES)
 
